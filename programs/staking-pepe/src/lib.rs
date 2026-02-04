@@ -26,6 +26,7 @@ pub mod staking_pepe {
     ) -> Result<()> {
         let pool = &mut ctx.accounts.pool;
         pool.authority = ctx.accounts.authority.key();
+        pool.initializer = ctx.accounts.authority.key();
         pool.staking_mint = ctx.accounts.staking_mint.key();
         pool.total_staked = 0;
         pool.bump = ctx.bumps.pool;
@@ -127,7 +128,7 @@ pub mod staking_pepe {
         let level_limits = &ctx.accounts.pool.staking_limits_by_level[level as usize];
         let level_idx = level as usize;
         let current_time = Clock::get()?.unix_timestamp as u64;
-        
+
         // Ensure staking_by_level vector is large enough
         while ctx.accounts.user_stake.staking_by_level.len() <= level_idx {
             ctx.accounts.user_stake.staking_by_level.push(StakingInfo {
@@ -171,7 +172,7 @@ pub mod staking_pepe {
             let period_end_time = start_time
                 .checked_add(level_limits.period)
                 .ok_or(StakingError::MathOverflow)?;
-            
+
             require!(
                 current_time < period_end_time,
                 StakingError::StakingPeriodEnded
@@ -258,7 +259,6 @@ pub mod staking_pepe {
         Ok(())
     }
 
-
     pub fn unstake(ctx: Context<Unstake>, level: u8) -> Result<()> {
         require!(
             level < ctx.accounts.user_stake.staking_by_level.len() as u8,
@@ -281,7 +281,7 @@ pub mod staking_pepe {
         let period_end_time = start_staking_time
             .checked_add(level_limits.period)
             .ok_or(StakingError::MathOverflow)?;
-        
+
         // Require that start_staking_time + period <= current_time (period has ended)
         require!(
             period_end_time <= current_time,
@@ -312,7 +312,7 @@ pub mod staking_pepe {
 
         let seeds = &[
             b"pool",
-            ctx.accounts.pool.authority.as_ref(),
+            ctx.accounts.pool.initializer.as_ref(),
             ctx.accounts.pool.staking_mint.as_ref(),
             &[ctx.accounts.pool.bump],
         ];
@@ -321,7 +321,7 @@ pub mod staking_pepe {
         let total_amount = amount_staked
             .checked_add(rewards)
             .ok_or(StakingError::MathOverflow)?;
-        
+
         token::transfer(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
@@ -428,7 +428,7 @@ fn accrue_rewards_internal(
         let reward_end_time = now.min(period_end_time);
 
         let dt: i128 = (reward_end_time as i128) - (reward_start_time as i128);
-        
+
         // Use APY from stake limits for this level
         let apy_bps = level_limits.apy_bps as i128;
 
@@ -443,7 +443,7 @@ fn accrue_rewards_internal(
 
         let mut level_accrued: u64 = 0;
         let mut level_boost_accrued: u64 = 0;
-        
+
         if reward_i128 > 0 {
             let reward_u64: u64 = u64::try_from(reward_i128).map_err(|_| StakingError::MathOverflow)?;
             level_accrued = reward_u64;
@@ -493,7 +493,7 @@ fn accrue_rewards_internal(
         }
 
         level_staking.last_update_ts = now;
-        
+
         // Track accrued rewards for this level (including boost rewards)
         if level_accrued > 0 {
             accrued_rewards.push(AccruedReward {
@@ -536,13 +536,15 @@ pub struct StakingLimit {
 #[account]
 pub struct Pool {
     pub authority: Pubkey,
+    pub initializer: Pubkey,
     pub staking_mint: Pubkey,
     pub total_staked: u64,
     pub staking_limits_by_level: Vec<StakingLimit>,
     pub bump: u8,
 }
 impl Pool {
-    pub const LEN: usize = 8 + 32 + 32 + 8 + 1 + 8 + MAX_LEVELS * (8 + 8 + 8 + 8 + 8 + 8 + 8);
+    pub const LEN: usize =
+        8 + 32 + 32 + 32 + 8 + 1 + 8 + MAX_LEVELS * (8 + 8 + 8 + 8 + 8 + 8 + 8);
 }
 
 #[derive(Clone, AnchorDeserialize, AnchorSerialize)]
@@ -619,7 +621,7 @@ pub struct DepositRewards<'info> {
     #[account(
         mut,
         has_one = authority,
-        seeds = [b"pool", pool.authority.as_ref(), pool.staking_mint.as_ref()],
+        seeds = [b"pool", pool.initializer.as_ref(), pool.staking_mint.as_ref()],
         bump = pool.bump
     )]
     pub pool: Account<'info, Pool>,
@@ -648,7 +650,7 @@ pub struct UpdateLimits<'info> {
     #[account(
         mut,
         has_one = authority,
-        seeds = [b"pool", pool.authority.as_ref(), pool.staking_mint.as_ref()],
+        seeds = [b"pool", pool.initializer.as_ref(), pool.staking_mint.as_ref()],
         bump = pool.bump
     )]
     pub pool: Account<'info, Pool>,
@@ -671,7 +673,7 @@ pub struct InitUser<'info> {
     pub owner: Signer<'info>,
 
     #[account(
-        seeds = [b"pool", pool.authority.as_ref(), pool.staking_mint.as_ref()],
+        seeds = [b"pool", pool.initializer.as_ref(), pool.staking_mint.as_ref()],
         bump = pool.bump
     )]
     pub pool: Account<'info, Pool>,
@@ -695,7 +697,7 @@ pub struct Stake<'info> {
 
     #[account(
         mut,
-        seeds = [b"pool", pool.authority.as_ref(), pool.staking_mint.as_ref()],
+        seeds = [b"pool", pool.initializer.as_ref(), pool.staking_mint.as_ref()],
         bump = pool.bump
     )]
     pub pool: Account<'info, Pool>,
@@ -736,7 +738,7 @@ pub struct Unstake<'info> {
 
     #[account(
         mut,
-        seeds = [b"pool", pool.authority.as_ref(), pool.staking_mint.as_ref()],
+        seeds = [b"pool", pool.initializer.as_ref(), pool.staking_mint.as_ref()],
         bump = pool.bump
     )]
     pub pool: Account<'info, Pool>,
@@ -774,7 +776,7 @@ pub struct Unstake<'info> {
 #[derive(Accounts)]
 pub struct UpdateUserRewards<'info> {
     #[account(
-        seeds = [b"pool", pool.authority.as_ref(), pool.staking_mint.as_ref()],
+        seeds = [b"pool", pool.initializer.as_ref(), pool.staking_mint.as_ref()],
         bump = pool.bump
     )]
     pub pool: Account<'info, Pool>,
@@ -794,23 +796,23 @@ pub struct UpdateUserRewards<'info> {
 
 #[error_code]
 pub enum StakingError {
-    #[msg("Unauthorized")] 
+    #[msg("Unauthorized")]
     Unauthorized,
-    #[msg("Math overflow")] 
+    #[msg("Math overflow")]
     MathOverflow,
-    #[msg("Too many staking levels")] 
+    #[msg("Too many staking levels")]
     TooManyLevels,
-    #[msg("Invalid staking limits")] 
+    #[msg("Invalid staking limits")]
     InvalidLimits,
-    #[msg("Invalid external state account owner")] 
+    #[msg("Invalid external state account owner")]
     InvalidExternalStateOwner,
-    #[msg("Invalid external state data")] 
+    #[msg("Invalid external state data")]
     InvalidExternalStateData,
-    #[msg("Level out of range")] 
+    #[msg("Level out of range")]
     LevelOutOfRange,
-    #[msg("Amount out of limits for this level")] 
+    #[msg("Amount out of limits for this level")]
     AmountOutOfLimits,
-    #[msg("Insufficient X3 level")] 
+    #[msg("Insufficient X3 level")]
     InsufficientX3Level,
     #[msg("No available staking rights for this level")]
     NoStakingRights,
